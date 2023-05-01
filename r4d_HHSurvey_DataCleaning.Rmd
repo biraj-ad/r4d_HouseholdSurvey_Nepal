@@ -1,0 +1,358 @@
+---
+title: "r4d_HHSurvey_DataCleaning"
+author: "Biraj Adhikari"
+date: "2023-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r requirements}
+library(dplyr)
+#Functions I use
+#function to directly convert numbers into categorical variables
+fct_case_when <- function(...) {
+  args <- as.list(match.call())
+  levels <- sapply(args[-1], function(f) f[[3]])  # extract RHS of formula
+  levels <- levels[!is.na(levels)]
+  factor(dplyr::case_when(...), levels=levels)
+}
+
+#This is for Trends in Ecosystems
+forLikert <- function(trend) {
+  trend = fct_case_when(
+    trend ==1 ~ "Increased a lot",
+    trend ==2 ~ "Increased a bit",
+    trend ==3 ~ "No Change/I don't know",
+    trend ==4 ~ "Decreased a bit",
+    trend ==5 ~ "Decreased a lot"
+
+  )
+}
+
+#This is for developmental trends
+forLik_Dev <- function(trend) {
+  trend = fct_case_when(
+    trend ==1 ~ "Improved a lot",
+    trend ==2 ~ "Improved a bit",
+    trend ==3 ~ "No Change/I don't know",
+    trend ==4 ~ "Worsened a bit",
+    trend ==5 ~ "Worsened a lot"
+  )
+}
+```
+
+## Data Reading  
+```{r reading data for imputation}
+hh <- read.csv("r4d_RawData_HouseholdNepal.csv", sep = ",", header = TRUE)
+
+#first, i will remove some problematic variables that should not be considered at all
+hh = hh %>% select(-c("Ward.Village.name", "q7_AgroWildlife", "q19A_GrasslandEcosystem", "q26_Huntpc",
+                      "q41_HealthTrends","q44_Toilet", "q51_Cook",
+                      "q59_FamEducation", "q70_Recre", "q75_Culture"))
+```  
+
+These variables are removed for the following reasons:  
+
+Ward/Village name is only for information for stakeholders  
+q7_AgroWildlife because enumerators had confusion about this and ended up asking different things  
+q19A_GrasslandEcosystem because we didn't ask this question in one location entirely  
+q26_Huntpc because only people from one location said they hunted for food. Additionally, enumerators said people were not honest about this answer  
+q41_HealthTrends: While the purpose of this was to see if in general, the status of health of household was improving or not, the participants felt we were talking about their own health (so, older people perceived their health was deteriorating over the years). We should have framed this question better...but for now, I think it is best that this is removed.  
+q44_Toilet because almost every house we surveyed had toilets  
+lot of confusion around q59_FamEducation by enumerators. So deleted  
+q51_Cook: major households reported Firewood, except in Bahundangi, who reported gas. I think this variable is best removed from the analysis  
+q70_Recre and q75_Culture are not relevant for the analysis  
+
+## Data Cleaning  
+Conversion of numerical variables into factors:  
+```{r data cleaning 1}
+hh = hh %>% 
+  #TYPE OF HOUSE
+  mutate(
+    House.Material = fct_case_when( 
+      House.Material == 1 ~ "Cement/Bricks/Concrete/Wood",
+      House.Material == 2 ~ "Mud/Thached/Straws"
+      # TRUE ~ as.character(House.Material)
+    )
+  ) %>%
+  
+  #GENDER
+  mutate(
+    Gender = fct_case_when(
+      Gender == 1 ~ "Female",
+      Gender == 2 ~ "Male"
+      #  TRUE ~ as.character(Gender)
+    )
+  ) %>%
+  
+  #EDUCATION
+  mutate(
+    Education = fct_case_when(
+      Education == 5 ~ "Bachelors' Completed or more",
+      Education == 4 ~ "Secondary Education",
+      Education == 3 ~ "Primary Education",
+      Education == 2 ~ "Basic Read/Write",
+      Education == 1 ~ "Uneducated"
+      
+      #    TRUE ~ as.character(Education)
+    )
+  ) %>%
+  
+  #ENOUGH FOOD
+  mutate(
+    q24_EnoughFood = fct_case_when(
+      q24_EnoughFood == 1 ~ "Yes",
+      q24_EnoughFood == 0 ~ "No"
+      
+      
+      #  TRUE ~ as.character(q24_EnoughFood)
+    )
+  ) %>%
+  
+  #ENOUGH INCOME
+  mutate(
+    q30_EnoughIncome = fct_case_when(
+      q30_EnoughIncome == 1 ~ "Very sufficient",
+      q30_EnoughIncome == 2 ~ "Sufficient",
+      q30_EnoughIncome == 3 ~ "I don't know",
+      q30_EnoughIncome == 4 ~ "Insufficient",
+      q30_EnoughIncome == 5 ~ "Very insufficient"
+      
+      #  TRUE ~ as.character(q30_EnoughIncome)
+    )
+  ) %>%
+  
+  #HEALTHY (note, in the analysis, we convert healthy into categorical variable of 2 levels)
+  mutate(
+    q35_Healthy = fct_case_when(
+      q35_Healthy == 1 ~ "Very healthy",
+      q35_Healthy == 2 ~ "A bit healthy",
+      q35_Healthy == 3 ~ "A bit unhealthy",
+      q35_Healthy == 4 ~ "Very unhealthy"
+      
+      #   TRUE ~ as.character(q35_Healthy)
+    )
+  ) %>%
+  
+  #ELECTRICITY
+  mutate(
+    q50_Electricity = fct_case_when(
+      q50_Electricity == 1 ~ "Yes",
+      q50_Electricity == 0 ~ "No"
+      
+      
+      #   TRUE ~ as.character(q50_Electricity)
+    )
+  ) %>%
+  
+  #ENERGY SUFFICIENCY (note that we use only 2 factors in the analysis)
+  mutate(
+    q54_EnergySuff = fct_case_when(
+      q54_EnergySuff ==1 ~ "Very sufficient",
+      q54_EnergySuff ==2 ~ "A bit sufficient",
+      q54_EnergySuff ==3 ~ "I don't know",
+      q54_EnergySuff ==4 ~ "A bit insufficient",
+      q54_EnergySuff ==5 ~ "Very insufficient"
+      
+      #   TRUE ~ as.character(q54_EnergySuff)
+    )
+  ) %>% 
+  
+  mutate(
+    q55_ElectricitySuff = fct_case_when(
+      q55_ElectricitySuff ==1 ~ "Very Sufficient",
+      q55_ElectricitySuff ==2 ~ "A bit sufficient",
+      q55_ElectricitySuff ==3 ~ "I don't know",
+      q55_ElectricitySuff ==4 ~ "A bit insufficient",
+      q55_ElectricitySuff ==5 ~ "Very insufficient"
+      
+      #     TRUE ~ as.character(q55_ElectricitySuff)
+    )
+  ) %>% 
+  
+  
+  #DRR
+  mutate(
+    q64_Drr = fct_case_when(
+      q64_Drr == 4 ~ "No Incidences",
+      q64_Drr == 3 ~ "A few minor incidences",
+      q64_Drr == 2 ~ "Many minor incidences",
+      q64_Drr == 1 ~ "One or more major incidences"
+    )
+  ) %>%
+  
+  #DRR Trends Reversed (since increase in DRR means a negative trend unlike the other variables)
+  #i did this to undo the mistake of reversing the sign here
+  mutate(
+    q66_DrrTrends = case_when(
+      q66_DrrTrends == 1 ~ 5,
+      q66_DrrTrends == 2 ~ 4,
+      q66_DrrTrends == 3 ~ 3,
+      q66_DrrTrends == 4 ~ 2,
+      q66_DrrTrends == 5 ~ 1
+    )
+  ) %>%
+  
+  #ConservationNature
+  mutate(q82_ConservationNature = fct_case_when(
+    q82_ConservationNature == 1 ~ "Benefits a lot",
+    q82_ConservationNature == 2 ~ "Benefits a bit",
+    q82_ConservationNature == 3 ~ "No effect/I don't know",
+    q82_ConservationNature == 4 ~ "Harms a bit",
+    q82_ConservationNature == 5 ~ "Harms a lot"
+  )) %>%
+  
+  mutate(q84_ConservationPeople = fct_case_when(
+    q84_ConservationPeople == 1 ~ "Benefits a lot",
+    q84_ConservationPeople == 2 ~ "Benefits a bit",
+    q84_ConservationPeople == 3 ~ "No effect/I don't know",
+    q84_ConservationPeople == 4 ~ "Harms a bit",
+    q84_ConservationPeople == 5 ~ "Harms a lot"
+  ))
+```  
+
+Converting dummy variables from numeric to categorical::
+
+```{r data cleaning 2}
+dummyvars = c("q37_HealthCheck_Hospital", "q37_HealthCheck_Aayurved", "q37_HealthCheck_Homemade", "q37_HealthCheck_Pharmacy",
+              "q37_HealthCheck_Dhami", "q43_WaterSource_Tap", "q43_WaterSource_River", "q43_WaterSource_Tube", "q43_WaterSource_Spring",
+              "q43_WaterSource_Well", "q43_WaterSource_Lake","q43_WaterSource_Others", "q60_EnvEducation_School",
+              "q60_EnvEducation_Media", "q60_EnvEducation_Fam" ,"q60_EnvEducation_Elders", "q60_EnvEducation_NGO",
+              "q60_EnvEducation_Others")
+
+hh[,dummyvars] = lapply(hh[,dummyvars], as.factor)
+rm(dummyvars)
+```  
+
+```{r data cleaning 3}
+#converting nature-trend variables from numeric to factor
+trendvars = c("q5_AgriTrends", "q6_AgroDiversity", "q11_ForestArea", "q12_ForestQuality", 
+              "q13_ForestWildlife", "q15_FreshwaterQuant", "q16_FreshwaterQual",
+              "q17_FreshwaterWildlife")
+
+hh[,trendvars] = lapply(hh[, trendvars], forLikert)
+
+#converting development-trend variables from numeric to factor (i replace the same trendvars variable here)
+trendvars = c("q22_FoodTrends", "q33_IncomeTrends", "q48_WaterTrends", 
+              "q56_EnergyTrends", "q57_ElectricityTrends", "q62_EducationTrends", "q66_DrrTrends")
+
+hh[,trendvars] = lapply(hh[, trendvars], forLik_Dev)
+
+rm(trendvars)
+#Occupation variable needs a bit of adjustment
+hh = hh %>% 
+  mutate(
+    Occupation = fct_case_when(
+      q29_Occupation_Agriculture == 1 ~ "Agriculture",
+      q29_Occupation_Business == 1 | q29_Occupation_Tourism == 1 ~ "Business",
+      
+      q29_Occupation_Health == 1 | q29_Occupation_Government == 1  | q29_Occupation_Education == 1 | q29_Occupation_Private == 1 ~ "Employment",
+      
+      q29_Occupation_Others == 1 ~ "Foreign Employment",
+      q29_Occupation_Labour == 1 ~ "Daily Wage"
+      
+    ))
+
+hh = hh %>% select(-c("q29_Occupation_Agriculture", "q29_Occupation_Business",
+                      "q29_Occupation_Tourism", "q29_Occupation_Health",
+                      "q29_Occupation_Government", "q29_Occupation_Education",
+                      "q29_Occupation_Private", "q29_Occupation_Others", 
+                      "q29_Occupation_Labour"))
+```  
+
+Making the levels of categorical variables intuitive and consistent::  
+```{r data cleaning 4}
+#all other categorical variables (Although most variables are repeated, the levels are in different order
+#so this helps put levels in consistent order)
+hh$Location = factor(hh$Location, levels = c("Bahundangi", "Sulubung", "Yamphudin"))
+hh$Caste = factor(hh$Caste, levels = c("Ethnic", "Higher", "Lower"))
+hh$Occupation = factor(hh$Occupation, levels  = c("Agriculture", "Daily Wage", "Employment",
+                                                              "Foreign Employment", "Business"))
+#wellbeing variables
+hh$q24_EnoughFood = factor(hh$q24_EnoughFood, levels = c("Yes", "No"))
+
+#nature perception  and WellbeingCluster categorical variable
+hh$Nature = factor(hh$Nature, levels = c("Non-Living", "Living", 
+                                         "Living and Non-living", "Spiritual and Abstract", "I don't know"))
+
+#converting all NCP questions (response variables) to ordinal variables
+hh$q20_NatureFood = factor(hh$q20_NatureFood, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q31_NatureWork = factor(hh$q31_NatureWork, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q39_NatureHealth = factor(hh$q39_NatureHealth, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q45_NatureWater = factor(hh$q45_NatureWater, levels = c(1,2,3,4,5),ordered = TRUE)
+hh$q52_NatureEnergy = factor(hh$q52_NatureEnergy, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q61_NatureEducation = factor(hh$q61_NatureEducation, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q67_NatureDrr = factor(hh$q67_NatureDrr, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q74_NatureRecrea = factor(hh$q74_NatureRecrea, levels = c(1,2,3,4,5), ordered = TRUE)
+hh$q79_NatureCulture = factor(hh$q79_NatureCulture, levels = c(1,2,3,4,5), ordered = TRUE)
+```  
+ 
+For land category, we can probably multiply the land price per ha with land size to get an estimate of price of land owned  
+I found a website of the government that shows the price of land.  
+#https://www.dolma.gov.np/office/dept/content/fiscal-year-2079-080-1659243606  
+Since price also varies in one village based on things like whether it is close to river or not, etc, i used the average. The mountain region does not have this information. So i used values from another mountain district similar to the one from our site (Prangbung Village - For Yamphudin).  
+
+```{r land price}
+#adding a column that multiples the price of land per location with the area
+hh = hh %>% mutate(LandPrice = case_when(
+  Location == "Bahundangi" ~ 250000 * q27_Land_ha, #price of land per hectare in Bahundangi
+  Location == "Sulubung" ~ 200000 * q27_Land_ha, #price of land per hectare in Sulubung
+  Location == "Yamphudin" ~ 30000 * q27_Land_ha #price of land per hectare in Yamphudin
+  ))
+
+#removed the land_ha variable
+hh = subset(hh, select = -q27_Land_ha)
+```  
+
+Column names are weird. This code changes columns to simpler names:  
+```{r column name simple}
+library(stringr) #for str_replace
+hh_q = hh %>% select(matches("^q\\d+_.+"))
+hh_q = hh_q %>% rename_all(~str_replace(.,"^q\\d+_","" ))
+hh_non_q = hh %>% select(-matches("^q\\d+_.+"))
+hh_modified = bind_cols(hh_non_q, hh_q)
+
+rm(hh_q, hh_non_q, hh)
+
+#ordering the variables so that it is easier:
+hh_ordered = hh_modified %>% select(
+  #non-wellbeing and demographic variables
+  Location, Caste, House.Material, Gender, Age,  Farmpc, Occupation, Nature,
+  
+  #Response variables
+  NatureFood, NatureWork, NatureHealth, NatureWater, NatureEnergy, 
+  NatureEducation, NatureDrr, NatureRecrea, NatureCulture,
+  
+  #wellbeing variables
+  Ladder, EnoughFood, EnoughIncome, LandPrice, tlu,
+  Healthy, WaterShortage, EnergySuff, ElectricitySuff, Education, Drr,
+  
+  #Aux Variables
+  #EcosystemTrends
+  AgriTrends, AgroDiversity, ForestArea, ForestQuality, ForestWildlife,
+  FreshwaterQual, FreshwaterQuant, FreshwaterWildlife,
+  
+  #Wellbeing Trends
+  FoodTrends, IncomeTrends, WaterTrends, EnergyTrends, Electricity, ElectricityTrends,
+  EducationTrends, DrrTrends,
+  
+  #Multiple choice (dummy) variables
+  HealthCheck_Hospital, HealthCheck_Aayurved, HealthCheck_Homemade, HealthCheck_Pharmacy,
+  HealthCheck_Dhami, WaterSource_Tap, WaterSource_River, WaterSource_Tube, WaterSource_Lake,
+  WaterSource_Spring, WaterSource_Well, WaterSource_Others, EnvEducation_School, EnvEducation_Media,
+  EnvEducation_Fam, EnvEducation_Elders, EnvEducation_NGO, EnvEducation_Others, 
+  
+  #conservation nature and people
+  ConservationNature, ConservationPeople
+)
+```
+
+Saving the final, cleaned dataset in file  
+```{r saving cleaned file}
+saveRDS(hh_ordered, file = "r4d_CleanData_HouseholdNepal.rds")
+rm(hh_modified, hh_ordered)
+```
+
