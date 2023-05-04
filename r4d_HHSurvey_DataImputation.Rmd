@@ -9,22 +9,597 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+---
+title: "missing value imputation"
+author: "N. Schenk"
+date: "2023-02-02"
+output: html_document
+---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Including Plots
+# Imputation of missing values
+Also referred to as : "gap-filling"
 
-You can also embed plots, for example:
+Paper taken as reference for algorithm: Stekhoven et al. 2012 https://doi.org/10.1093/bioinformatics/btr597
+Paper that shows the algorithm does the job: Penone et al. 2014 doi: 10.1111/2041-210X.12232
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+## Requirements
+```{r}
+library(dplyr)
+library(missForest)
+library(visdat) # to show missing values in a plot
+library(polycor) # for the hetcor function
+library(corrplot) # to visualise the correlations
+library(data.table)
+library(ggplot2)
+library(cowplot)
+
+#TODO select the option below
+variables_to_include <- "explanatory"
+#variables_to_include <- "response"
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+This script is heavily based on the following script (written by N. Schenk based on scripts from C. Penone) : https://github.com/allanecology/BetaDivMultifun/blob/master/vignettes/function_imputation.Rmd
+
+## Data preparation
+The dataset 'r4d_CleanData_HouseholdNepal.rds", obtained from "r4d_HHSurvey_DataCleaning.rmd", where we cleaned the raw data is used for imputation.  
+
+
+Additionally, we impute response and explanatory variables separately. We have also included a lot of other variables from the household survey which we do not use in the mansucript, or in the analysis to enhance imputation quality.
+
+Separating explanatory and response variables
+```{r data input}
+maindata = readRDS("r4d_CleanData_HouseholdNepal.rds")
+
+explanatory_variables <- strsplit("Location, Caste, House.Material, Gender, Age, Farmpc, Occupation, Nature, Ladder, EnoughFood, EnoughIncome, LandPrice, tlu, Healthy, WaterShortage, EnergySuff, ElectricitySuff, Education, Drr", split = ", ")[[1]]
+
+#making a separate list for auxillary variables, just in case we might need them later:
+aux_variables <-strsplit("AgriTrends, AgroDiversity, ForestArea, ForestQuality, ForestWildlife, FreshwaterQual, FreshwaterQuant, FreshwaterWildlife, FoodTrends, IncomeTrends, WaterTrends, EnergyTrends, Electricity, ElectricityTrends, EducationTrends, DrrTrends, HealthCheck_Hospital, HealthCheck_Aayurved, HealthCheck_Homemade, HealthCheck_Pharmacy, HealthCheck_Dhami, WaterSource_Tap, WaterSource_River, WaterSource_Tube, WaterSource_Lake, WaterSource_Spring, WaterSource_Well, WaterSource_Others, EnvEducation_School, EnvEducation_Media, EnvEducation_Fam, EnvEducation_Elders, EnvEducation_NGO, EnvEducation_Others, ConservationNature, ConservationPeople", split = ", ")[[1]]
+
+#adding explanatory and auxillary variables together to use for imputation
+explanatory_variables <- c(explanatory_variables, aux_variables)
+
+response_variables <- strsplit("NatureFood + NatureWork + NatureHealth + NatureWater + NatureEnergy + NatureEducation + NatureDrr + NatureRecrea + NatureCulture", split = " [+] ")[[1]]
+
+maindata_explanatory_variables <- maindata[, explanatory_variables]
+maindata_response_variables <- maindata[, response_variables]
+
+rm(explanatory_variables)
+rm(response_variables)
+rm(aux_variables)
+rm(maindata)
+```
+
+
+```{r visualizing missing data}
+if(variables_to_include == "explanatory"){
+  dataset_raw <- maindata_explanatory_variables # rename dataset --> no confusion and easy to chose another dataset
+} else if(variables_to_include == "response"){
+  dataset_raw <- maindata_response_variables # rename dataset --> no confusion and easy to chose another dataset
+}
+rm(maindata_explanatory_variables, maindata_response_variables)
+
+str(dataset_raw)
+visdat::vis_miss(dataset_raw, sort_miss = T)
+```
+
+
+Cleaning out variables with too many missing values, i.e. with more than 20% of missing values. Note that our recommendation is to perform the imputation even if > 20% are missing, but carefully check the imputation error and exclude the variables if the imputation error is too high.
+
+Below : code to exclude variables with > 20% missing values
+```{r, eval = T}
+threshold <- 0.2
+t <- apply(dataset_raw, 2, function(x) sum(is.na(x)))
+exclude <- names(which(t > nrow(dataset_raw) * threshold)) 
+dataset_raw <- dataset_raw[, !colnames(dataset_raw) %in% exclude]
+rm(t); rm(exclude); rm(threshold)
+```
+
+
+## Check Correlations
+
+Identify numeric variables
+
+```{r identification of numeric variables}
+# create dataset with only numeric variables
+#note: no numeric data for response variables
+corrdataset_raw <- dataset_raw[, colnames(dataset_raw)[sapply(dataset_raw, is.numeric)]]
+```
+
+Since our dataset is mixed type, we perform correlation using hetcor (pearson, polyserial and polychoric correlation)  
+- pearson correlation between 2 numeric variables  
+- polyserial correlations between numeric and ordinal variables  
+- polychoric correlations between ordinal variables  
+
+
+```{r correlation check}
+dataset_raw <- as.data.frame(dataset_raw)
+maindata_cor <- hetcor(dataset_raw, use = "pairwise.complete.obs") # takes some time 
+
+# we use complete observations. Therefore, each one to one correlation is based on all available rows (observations). The number of observations thus potentially differs for each comparison  
+
+#    we can check the number of observations the given correlation is based on 
+corrplot(maindata_cor$n, method = "circle", type = "lower", 
+         tl.col = "black", tl.srt = 45, diag = F, order = "original", is.corr = F)
+#
+corrplot(maindata_cor$correlations, method = "circle", type = "lower", 
+         tl.col = "black", tl.srt = 45, diag = T, tl.cex = 0.4)  
+
+#    as rule of thumb, no explanatory variables in the same model should have a correlation of higher than 0.7. Here that would mean : no case with correlation > 0.7
+
+thres <- 0.7
+highcorr <- maindata_cor$correlations
+highcorr[highcorr < thres & highcorr > -thres] <- 0
+corrplot(highcorr, method = "circle", type = "lower", 
+         tl.col = "black", tl.srt = 45, diag = F, tl.cex = 0.4)
+
+dev.off() # to remove hetcorr specific plotting window
+```
+Here we see that Location and Caste is highly correlated.  
+
+```{r removing some variables}
+rm(highcorr, thres)
+```
+
+
+
+## Log transformation and removal of negative
+
+before changing values, store the original dataset
+```{r}
+dataset_raw_backup <- data.table::copy(dataset_raw)
+corrdataset_raw <- data.table::data.table(corrdataset_raw) # change to data.table class (code used data.table, not data.frame)
+```
+
+remove negative values in the numeric variables, remember to add again after imputation!
+find negative values
+```{r}
+par(mar = c(10, 1, 3, 1))
+boxplot(corrdataset_raw, las=2)
+# minimum of the numeric columns
+negative <- colnames(corrdataset_raw)[which(corrdataset_raw[, lapply(.SD, function(x) min(x, na.rm=T))] < 0)]
+
+if(length(negative) == 0){
+  print("no negative values to exclude")
+} else if(length(negative) > 0){
+  print(paste("need to shift", length(negative), "negative values. Please run and adapt code chunk below."))
+}
+```
+
+Log transformation of the numeric columns. The natural logartithm of values smaller than 1 is negative. Therefore, all values are shifted by 1 again to avoid any negative values in the log transformed dataset.
+```{r}
+dataset_raw <- data.table(dataset_raw) # convert to class data.table, from now on, this package is used for data wrangling 
+numcols <- colnames(dataset_raw)[sapply(dataset_raw, is.numeric)]
+dataset_raw[, (numcols) := lapply(.SD, as.numeric), .SDcols = numcols]
+# log transform the values + 1, later shift them back.
+dataset_raw[, (numcols) := lapply(.SD, function(x) log(x+1)), .SDcols = numcols]
+
+# record NA value positions for visualistation
+naloc <- is.na(dataset_raw)
+```
+
+
+# Imputation
+
+The imputation is repeated 50 times, and the mean of the imputed values is taken. 
+
+
+## Tuning mtry paramteter (additional)
+
+By default square root of p = number of columns. Try values between 2 and 50 to tune the OOB error. Find the minimum of error and use the according mtry parameter value. Around 20 worked well in previous projects.
+
+source script : https://github.com/eric-allan/BE.RE.analysis/blob/master/EF_select_suitable_functions.R by Caterina Penone
+```{r, eval = F}
+# note : only run once, then work with the output dataset.
+maxiteration <- ifelse(variables_to_include == "explanatory", 50, 9)
+sqrt(ncol(dataset_raw))
+OOB_NRMSE <- c()
+i <- 1
+for (mtry in 2:maxiteration) {
+   imp.matX <- missForest(dataset_raw, mtry = mtry)
+
+   OOB_NRMSE[i] <- imp.matX$OOBerror[1]
+   i <- i + 1
+   print(i)
+}
+#note: for response variable, there is no NRMSE (since everything is categorical)
+#so, we are actually comparing the PFC, not NRMSE. But the code is the same to make it less complicated.
+
+if(variables_to_include == "explanatory"){
+saveRDS(OOB_NRMSE, file = "ImputationResults/ParameterTuning/tune_mtry_OOB_NRMSE_explanatory.rds")
+}
+
+if(variables_to_include == "response"){
+saveRDS(OOB_NRMSE, file = "ImputationResults/ParameterTuning/tune_mtry_OOB_NRMSE_response.rds")
+}
+
+rm(i)
+```
+
+
+### calculate NRMSE (additional)
+
+In case variablewise = T : Normalise MSE of numeric variables. Normalising by variance, as done in the missforest package, given by function `nrmse()` and `missForest()` (https://rdrr.io/cran/missForest/man/missForest.html) :
+
+\[NRMSE = \frac{RMSE}{\sigma} = \frac{\sqrt{MSE}}{\sigma} = \frac{\sqrt{mean((X_{true} - X_{imp})^2)}}{\sqrt{var(X_{true})}}\]
+
+source : https://stat.ethz.ch/education/semesters/ss2012/ams/paper/missForest_1.2.pdf
+additional source : https://www.marinedatascience.co/blog/2019/01/07/normalizing-the-rmse/ 
+```{r, eval = F}
+imperr <- readRDS(file = "Results/additional/tune_mtry_OOB_NRMSE_full_explanatory.rds")
+imperr <- data.table(imperr[[1]])
+imperr <- merge(imperr, numcols_sd, by = "columns", all.x = T)
+imperr[, NRMSE := sqrt(errors) / column_sd]
+plot(imperr$errors, imperr$NRMSE)
+
+imperr[is.na(NRMSE), NRMSE := errors]
+OOB_NRMSE <- imperr
+```
+
+
+### visualise mtry optimisation
+```{r}
+if(variables_to_include == "explanatory"){
+  OOB_NRMSE <- readRDS(file = "ImputationResults/ParameterTuning/tune_mtry_OOB_NRMSE_explanatory.rds")
+}
+if(variables_to_include == "response"){
+  OOB_NRMSE <- readRDS(file = "ImputationResults/ParameterTuning/tune_mtry_OOB_NRMSE_response.rds")
+}
+
+# plot(seq(2, 50), OOB_NRMSE, type = "l", ylab = "OOB",
+#      xlab = "mtry", ylim = c(0.1, 0.4))
+# abline(h = 0.2, lty = "dashed", col = "gray")
+
+if(variables_to_include == "explanatory"){
+pdf(file = "ImputationResults/ParameterTuning/plot_tune_mtry_explanatory.pdf", paper = "a4r") 
+}
+if(variables_to_include == "response"){
+pdf(file = "ImputationResults/ParameterTuning/plot_tune_mtry_response.pdf", paper = "a4r")   
+}
+plot(seq(2, maxiteration), OOB_NRMSE, type = "l", ylab = "OOB",
+     xlab = "mtry")
+abline(v = which(OOB_NRMSE == min(OOB_NRMSE)) + 1, lty = "dashed", col = "orange")
+dev.off()
+
+which(OOB_NRMSE == min(OOB_NRMSE)) + 1 # optimal mtry for explanatory is 28
+#note: new value of mtry after removing conservationnature and conservationpeople = 22
+```
+Explanatory : use mtry = 22
+
+Response : use mtry = 3
+
+
+## Tuning ntree paramteter (additional)
+default is 100, increasing ntree can decrease the imputation error.
+source script : https://github.com/eric-allan/BE.RE.analysis/blob/master/EF_select_suitable_functions.R by Caterina Penone
+```{r, eval = F}
+mtry_val = ifelse(variables_to_include == "explanatory", 22, 3)
+
+OOB_NRMSE <- c()
+i <- 1
+for (ntree in c(100, 110, 120, 130, 180, 200)) {
+   imp.matX <- missForest(dataset_raw, mtry = mtry_val, ntree = ntree)
+   OOB_NRMSE[i] <- imp.matX$OOBerror[1]
+   i <- i + 1
+   print(i)
+}
+OOB_NRMSE <- data.table(ntree = c(100, 110, 120, 130, 180, 200), OOB = OOB_NRMSE)
+
+if(variables_to_include == "explanatory"){
+saveRDS(OOB_NRMSE, file = "ImputationResults/ParameterTuning/tune_ntree_OOB_NRMSE_explanatory.rds")
+}
+if(variables_to_include == "response"){
+saveRDS(OOB_NRMSE, file = "ImputationResults/ParameterTuning/tune_ntree_OOB_NRMSE_response.rds")  
+}
+
+rm(i); rm(ntree)
+```
+Visualise
+```{r}
+if(variables_to_include == "explanatory"){
+  OOB_NRMSE <- readRDS(file = "ImputationResults/ParameterTuning/tune_ntree_OOB_NRMSE_explanatory.rds")
+}
+if(variables_to_include == "response"){
+  OOB_NRMSE <- readRDS(file = "ImputationResults/ParameterTuning/tune_ntree_OOB_NRMSE_response.rds")
+}
+
+OOB_NRMSE[which(OOB_NRMSE$OOB == min(OOB_NRMSE$OOB)), ntree] # 120 for explanatory
+
+if(variables_to_include == "explanatory"){
+pdf("ImputationResults/ParameterTuning/plot_tune_ntree_explanatory.pdf")
+}
+if(variables_to_include == "response"){
+pdf("ImputationResults/ParameterTuning/plot_tune_ntree_response.pdf")
+}
+
+plot(OOB_NRMSE$ntree, OOB_NRMSE$OOB, type = "l", ylab = "OOB",
+     xlab = "ntree")
+abline(v = OOB_NRMSE[which(OOB_NRMSE$OOB == min(OOB_NRMSE$OOB)), ntree], lty = "dashed", col = "orange")
+abline(v = 100, lty = "dashed", col = "darkgreen")
+
+dev.off()
+```
+Explanatory variables : stay with ntree = 100 (120 is not really better)
+Response variables: I guess the same: stay with ntree = 100
+
+
+
+## Imputation
+```{r}
+# 50 imputations
+impvals <- list()
+imperr <- list()
+dataset <- dataset_raw
+```
+
+```{r imputation, results="hide", eval=F}
+#TODO Biraj : adapt the number of imputations according to your needs. Finally : 50 rounds of imputation (takes a long time). For testing purpose : chose e.g. 2 rounds.
+mtry_val = ifelse(variables_to_include == "explanatory", 22, 100)
+for(i in 1:50){
+  print(i)
+  current <- missForest::missForest(dataset, variablewise = F, mtry = mtry_val, ntree = 100)
+  
+  # # if variablewise = T is chosen
+  # imperr[[i]] <- data.table::data.table("columns" = colnames(dataset), "errors" = current$OOBerror)
+  # 
+  # if OOB error (default)
+  imperr[[i]] <- data.table::data.table("columns" = names(current$OOBerror), "errors" = current$OOBerror)
+  
+  current <- data.table::as.data.table(current$ximp)
+  # re-transform the numeric variables
+  current[, (numcols) := lapply(.SD, function(x) (exp(x)-1)), .SDcols = numcols]
+  
+  # if negative values : 
+  #TODO re-transform the negative values if there are any (example code below)
+  # current$tlu.log <- current$tlu.log - abs(mintlulog)
+  
+  # convert imputed data.table to matrix, as more handy for imputed values handling
+  impvals[[i]] <- current
+}
+rm(current); rm(i)
+# note : file is automatically stored as "explanatory" or as "response"
+if(variables_to_include == "explanatory"){
+  saveRDS(impvals, file="ImputationResults/ImputedDatasets/raw_imputed_explanatory_dataset_complete.rds")
+  saveRDS(imperr, file = "ImputationResults/ImputedDatasets/raw_imputed_explanatory_errors_complete.rds")
+}
+if(variables_to_include == "response"){
+  saveRDS(impvals, file="ImputationResults/ImputedDatasets/raw_imputed_response_dataset_complete.rds")
+  saveRDS(imperr, file = "ImputationResults/ImputedDatasets/raw_imputed_response_errors_complete.rds")
+}
+```
+
+read imputation values
+```{r}
+if(variables_to_include == "explanatory"){
+  impvals <- readRDS("ImputationResults/ImputedDatasets/raw_imputed_explanatory_dataset_complete.rds")
+  imperr <- readRDS("ImputationResults/ImputedDatasets/raw_imputed_explanatory_errors_complete.rds")
+}
+if(variables_to_include == "response"){
+  impvals <- readRDS("ImputationResults/ImputedDatasets/raw_imputed_response_dataset_complete.rds")
+  imperr <- readRDS("ImputationResults/ImputedDatasets/raw_imputed_response_errors_complete.rds")
+}
+```
+
+
+# Check imputation error
+
+For error variablewise=T please outcomment the indicated pieces of code below. else run the code as is.
+```{r, eval = T}
+
+imperr <- do.call(rbind, imperr)
+
+# # in case the variablewise = T option is taken :
+# # Normalise and square-root the MSE to get NRMSE for numeric variables
+# imperr <- merge(imperr, numcols_means, all.x = T, by = "columns", fill = NA)
+# imperr[columns %in% numcols, errors := sqrt(errors)/ column_sd]
+
+mimperr <- data.table::as.data.table(aggregate(errors ~ columns, imperr, mean))
+
+# # for variablewise = T
+# mean(mimperr[, errors])
+# mean(imperr[errors != 0, errors]) # 0.17 mean of only the imputed values
+# # barplot(height=mimperr[,errors], names.arg = mimperr[, columns])
+
+
+mimperr[columns == "NRMSE", errors] # 0.29 (numerical variables)
+mimperr[columns == "PFC", errors] # 0.04   (categorical variables)
+                                  #0.14 (for explanatory categorical variables)
+
+
+p <- ggplot2::ggplot(data = mimperr, aes(x =columns, y = errors)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x = element_text(color = "black", size=6, angle=30, vjust=.8, hjust=0.8)) +
+  geom_hline(yintercept=0.25, linetype="dashed", color = "gray") +
+  ylab("OOB imputation error") + xlab("")
+p
+
+if(variables_to_include == "explanatory"){
+  pdf(file = "ImputationResults/QualityChecks/imputation_error_allvars_explanatory.pdf", paper = "a4r")
+  p
+}
+if(variables_to_include == "response"){
+ pdf(file = "ImputationResults/QualityChecks/imputation_error_allvars_response.pdf", paper = "a4r")
+  p
+}
+#TODO save as pdf A5 portrait: "Results/imputation_error_allvars_explanatory.pdf" or "Results/imputation_error_allvars_response.pdf"
+```
+
+
+Careful consideration by hand required : The threshold for imputation error is 25%.
+In case the error is higher, but there was only 1-2 missing values imputed, one might decide to keep the imputations, and accept the higher error, because it is still less bias than excluding the given observations completely. In case this is done, keep the decision in mind and consider in the discussion of the results.
+
+Note that the NRMSE measures the error of numeric variables, while the PFC measures the error of categorical variables.
+
+
+
+
+# Quality checks
+
+```{r, eval=F}
+pdf("Results/imputation_allvars_explanatory.pdf", paper = "a4") #TODO adapt for response variables
+cowplot::plot_grid(naniar::vis_miss(dataset_raw, sort_miss = T), p, nrow = 2, rel_heights = c(0.7, 0.3))
+dev.off()
+```
+
+
+Get together imputed dataset from 50 imputations.
+```{r}
+# add an ID column for merging to each dataset (each element of the list)
+add_ID_col <- function(x) data.frame(ID = factor(seq(1, nrow(x))), x) # create function to use in lapply
+impvals <- lapply(impvals, FUN = add_ID_col)
+rm(add_ID_col) # remove function (single usage)
+
+X <- do.call(rbind, impvals)
+X <- data.table::as.data.table(X)
+X[, (numcols) := lapply(.SD, as.numeric), .SDcols = numcols]
+# aggregating the 50 imputed values together
+Y_num <- X[, lapply(.SD, mean, na.rm=T), .SDcols = numcols, by = ID] # take mean for numeric values
+# factors
+faccols <- colnames(X)[!colnames(X) %in% c(numcols, "ID")]
+find_most_frequent_category <- function(x){
+  res <- x[which(x == names(which.max(table(x))))[1]]
+  return(res)
+} 
+Y_fac <- X[, lapply(.SD, find_most_frequent_category), .SDcols = faccols, by = ID]
+rm(find_most_frequent_category)
+
+# combine dataset to mixed data type
+Y <- merge(Y_num, Y_fac, by = "ID", all = T)
+Y <- data.table::data.table(Y)
+#TODO remove participant ID (if wanted)
+Y[, ID := NULL]
+
+if(variables_to_include == "explanatory"){
+  saveRDS(Y, "ImputationResults/clean_imputed_explanatory_dataset.rds")
+}
+
+if(variables_to_include == "response"){
+ saveRDS(Y, "ImputationResults/clean_imputed_response_dataset.rds")
+}
+
+
+rm(Y_num); rm(Y_fac)
+```
+
+## Visual check
+
+### numeric variables
+Compare imputed values with real values. Creates the pdf `imputed_values.pdf`
+```{r, eval=F}
+numimpcols <- names(which(apply(naloc, 2, sum) > 0))
+numimpcols <- numimpcols[which(numimpcols  %in% numcols)]
+# visualise imputation accuracy by column: 
+# Is a given missing value always filled by the same category?
+
+numimplist <- list()
+for(i in 1:length(numimpcols)){
+  n <- numimpcols[i]
+  print(n)
+  # impossible to plot all imputed categories for all missing values.
+  # draft solution : randomly chose one of the imputed values and
+  # show all 50 rounds for this one.
+  id <- sample(which(naloc[, which(colnames(naloc) == n)]), 1)
+  
+  temp_backup_dataset <- data.table(variable = rep(n, nrow(dataset_raw_backup)), value = dataset_raw_backup[, n])
+  colnames(temp_backup_dataset)[2] <- "value"
+  
+  p <- ggplot(temp_backup_dataset,
+         aes(y = variable, x = value)) +
+    geom_violin() +
+    geom_point(data = data.table(value = X[ID == id, get(n)], variable = n),
+               position = position_jitter(), 
+               aes(y = variable, x = value)) +
+    # geom_point(aes(x = mean(X[ID == id, get(n)]), y = n, colour = "red")) +
+    theme(legend.position="none") +
+    labs(title = paste(c(n, " , ID :", id), collapse = ""))
+  
+  numimplist[[i]] <- p
+}
+rm(temp_backup_dataset, i, id, p, n)
+
+pdf(file = "ImputationResults/QualityChecks/explanatory_imputation__numeric_random_ID.pdf")
+plot_grid(plotlist = numimplist, nrow = 2)
+
+```
+
+### categorical variables
+```{r}
+facimpcols <- names(which(apply(naloc, 2, sum) > 0)) # factor columns where some of the values were missing
+facimpcols <- facimpcols[which(facimpcols  %in% faccols)]
+# visualise imputation accuracy by column: 
+# Is a given missing value always filled by the same category?
+if(variables_to_include == "explanatory"){
+pdf("ImputationResults/QualityChecks/explanatory_imputation_factors_random_ID.pdf", paper = "a4r")
+}
+
+if(variables_to_include == "response"){
+pdf("ImputationResults/QualityChecks/response_imputation_factors_random_ID.pdf", paper = "a4r")  
+}
+par(mfrow = c(3, 3))
+for(f in facimpcols){
+  # impossible to plot all imputed categories for all missing values.
+  # draft solution : randomly chose one of the imputed values and
+  # show all 50 rounds for this one.
+  id <- sample(which(naloc[, which(colnames(naloc) == f)]), 1)
+  
+  plot(table(X[ID == id, get(f)]), 
+       main = paste(f, ", ID : ", id, sep = ""))
+}
+# purpose of this graph : get an idea of the imputation of categories --> do we get the same
+# category for a given value across all 50 imputation rounds, or not?
+# Rough idea : We select for each of the colums one ID randomly and visualise the 50
+# values which were used to fill. Histogram. If one of the categories clearly dominates --> 
+# good sign.
+
+rm(facimpcols); rm(f)
+```
+
+
+
+## correlations
+
+Check correlations after imputation (use same code as above)
+
+### for a dataset with mixed type of data
+```{r}
+#removing auxillary variables to see correlation on only those variables we later use in analysis
+explanatory_variables <- strsplit("Location, Caste, House.Material, Gender, Age, Farmpc, Occupation, Nature, Ladder, EnoughFood, EnoughIncome, LandPrice, tlu, Healthy, WaterShortage, EnergySuff, ElectricitySuff, Education, Drr", split = ", ")[[1]]
+
+if(variables_to_include == "explanatory"){
+Y_subset <- Y[, ..explanatory_variables]
+}
+if(variables_to_include == "response"){
+Y_subset <- Y
+}
+
+maindata_cor <- hetcor(Y_subset, use = "pairwise.complete.obs") # takes some time 
+
+
+if(variables_to_include == "explanatory"){
+  pdf(file = "ImputationResults/QualityChecks/correlations_after_imp_onlyexplanatory.pdf")
+}
+
+if(variables_to_include == "response"){
+  pdf(file = "ImputationResults/QualityChecks/correlations_after_imp_response.pdf")
+}
+
+corrplot(maindata_cor$correlations, method = "circle", type = "lower", 
+         tl.col = "black", tl.srt = 45, diag = T, tl.cex = 0.4)
+
+#TODO save as pdf : "Results/correlations_allvars_before_imp_explanatory.pdf" or "Results/correlations_allvars_before_imp_response.pdf"
+
+dev.off() # to remove hetcorr specific plotting window
+
+rm(Y_subset)
+```
+
+# clean
+```{r}
+# clean a bit
+rm(corrdataset_raw, dataset_raw_backup, imvals, mimperr, naloc, numimplist, OOB_NRMSE, Y, X, negative, numcols, numimpcols, faccols, variables_to_include)
+```
+
+
