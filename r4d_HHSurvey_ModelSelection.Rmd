@@ -9,3 +9,250 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Model Selection
+This file takes the imputed dataset as an input and runs model selection through multiple linear regression  
+(with NCP Attitude Score as the response variable)
+
+Requirements
+```{r loading library}
+library(dplyr)
+```
+
+#functions for this file:
+```{r}
+#These functions are for model diagnostics
+sf = function(y) {
+    c('Y>=1' = qlogis(mean(y >= 1)),
+    'Y>=2' = qlogis(mean(y >= 2)),
+    'Y>=3' = qlogis(mean(y >= 3)),
+    'Y>=4' = qlogis(mean(y>= 4)),
+    'Y>=5' = qlogis(mean(y>= 5)))
+}
+
+
+probfun = function(x) {
+  exp(x)/(1+exp(x))
+}
+
+fct_case_when <- function(...) {
+  args <- as.list(match.call())
+  levels <- sapply(args[-1], function(f) f[[3]])  # extract RHS of formula
+  levels <- levels[!is.na(levels)]
+  factor(dplyr::case_when(...), levels=levels)
+}
+```
+
+# Data Import and Management
+
+## Data Import
+Since the results from imputation have response and explanatory variables separately, we need to combine this:
+```{r}
+exp_vars <- readRDS("ImputationResults/clean_imputed_explanatory_dataset.rds")
+exp_vars <- data.frame(exp_vars)
+#remove auxillary variables:
+explanatory_variables <- strsplit("Location, Caste, House.Material, Gender, Age, Farmpc, Occupation, Nature, Ladder, EnoughFood, EnoughIncome, LandPrice, tlu, Healthy, WaterShortage, EnergySuff, ElectricitySuff, Education, Drr", split = ", ")[[1]]
+exp_vars <- exp_vars[, explanatory_variables]
+rm(explanatory_variables)
+
+exp_vars <- exp_vars %>% 
+  mutate(ID = factor(seq(1, nrow(exp_vars)))) %>%
+  relocate(ID, .before = "Location")
+
+res_vars <- readRDS("ImputationResults/clean_imputed_response_dataset.rds")
+
+res_vars <- res_vars %>% 
+  mutate(ID = factor(seq(1, nrow(res_vars)))) %>%
+  relocate(ID, .before = "NatureFood")
+
+#merge explanatory and response variables by common ID
+maindata <- merge(res_vars, exp_vars, by = "ID")
+
+rm(exp_vars, res_vars)
+```
+
+## Data Management
+```{r}
+#creating ncp_index variable
+#first converting ncp perception variables to numeric
+ncpsubset <- maindata %>%
+  select(NatureFood, NatureWork, NatureHealth, NatureWater, 
+         NatureEnergy, NatureEducation, NatureDrr, NatureRecrea, 
+         NatureCulture) %>%
+  sapply(as.numeric) %>%
+  as.data.frame() %>%
+  mutate(index = round(rowMeans(.), 3))
+
+maindata <- maindata %>% 
+  mutate(ncp_index = ncpsubset$index) %>%
+  relocate(ncp_index, .before = "Location")
+
+rm(ncpsubset)
+
+#making necessary conversions
+maindata <- maindata %>%
+  
+#EDUCATION
+mutate(Education = fct_case_when(
+  Education == "Uneducated" ~ "Illeterate", #I think this word makes more sense
+  Education == "Basic Read/Write" ~ "Basic Literacy",
+  Education == "Primary Education" ~ "Primary",
+  TRUE ~ "Secondary or more"
+)) %>%
+
+#OCCUPATION
+mutate(Occupation = fct_case_when(
+  Occupation == "Agriculture" ~ "Agriculture",
+  Occupation == "Daily Wage" ~ "Daily Wage",
+  TRUE ~ "Employment & Business"
+)) %>%
+  
+#INCOME SUFFICIENCY  
+mutate(EnoughIncome = fct_case_when(
+  (EnoughIncome == "Very sufficient") | (EnoughIncome == "Sufficient") ~ "Yes",
+  TRUE ~ "No"
+)) %>%
+  
+#HEALTH
+mutate(Healthy = fct_case_when(
+  (Healthy == "Very healthy") | (Healthy == "A bit healthy") ~ "Yes",
+  TRUE ~ "No"
+)) %>%
+
+#WATER ACCESS
+mutate(WaterAccess = fct_case_when(
+    WaterShortage == 0 ~ "Yes",
+    WaterShortage > 0 ~ "No"
+  )) %>%
+
+#ENERGY SUFFICIENCY
+mutate(EnergySuff = fct_case_when(
+  (EnergySuff == "Very sufficient") | (EnergySuff == "A bit sufficient") | (EnergySuff == "I don't know") ~ "Yes",
+  TRUE ~ "No"
+)) %>%
+  
+#ELECTRICITY SUFFICIENCY
+mutate(ElectricitySuff = fct_case_when(
+  (ElectricitySuff == "Very Sufficient") | (ElectricitySuff == "A bit sufficient") | (ElectricitySuff == "I don't know") ~ "Yes",
+  TRUE ~ "No"
+)) %>%
+
+#DISASTER FREE OR NOT  
+mutate(DisasterFree = fct_case_when(
+  Drr == "No Incidences" ~ "Yes",
+  TRUE ~ "No"
+)) %>%
+
+#note: i haven't converted tlu to tlu.log because it produces inf values
+#removed WaterShortage and Drr since i converted them to WaterAcess and DisasterFree or not
+#(the variables are framed in a way of whether they have access to them or not)
+
+select(-WaterShortage, -Drr)
+  
+```
+
+## Saving the data
+```{r saving data for regression analysis}
+saveRDS(maindata, "hh_data_for_regression_March2023.RDS")
+```
+
+# Chronbach's Alpha Test
+```{r chronbach's alpha}
+library(ltm)
+maindata %>% dplyr::select(NatureFood, NatureWork, NatureHealth, NatureWater, NatureEnergy, NatureEducation, NatureDrr, NatureRecrea, NatureCulture) %>% cronbach.alpha(na.rm = TRUE, CI = TRUE, standardized = TRUE)
+```
+  
+Chronbach's Alpha = 0.796, which is good.    
+
+# Correlation Check  
+Note: In most cases, a correlation coefficient of 0.7 or higher for two variables means that we should probably exclude one of them in the analysis. However, I haven't found a really nice reference for this.
+```{r correlation plots}
+#selecting only explanatory variables
+library(polycor)
+library(corrplot)
+
+testdata <- maindata %>%
+ dplyr::select(Location, Caste, Gender, Age, Farmpc,
+         Occupation, Nature, Ladder, EnoughFood, EnoughIncome,
+         LandPrice, Healthy, EnergySuff, ElectricitySuff, Education,
+         WaterAccess, DisasterFree, tlu)
+ 
+maindata_cor <- hetcor(testdata, use = "pairwise.complete.obs")
+rm(testdata)
+#plotting
+corrplot(maindata_cor$correlations, method = "circle", type = "lower", 
+         tl.col = "black", tl.srt = 45, diag = F, order = "hclust", addCoef.col = "black", number.cex = 0.6)
+rm(maindata_cor)
+```
+
+Correlation between Location and Caste is high. Giving a closer look:    
+```{r Location and Caste Correlation}
+#Location and Caste
+table(maindata[, c("Location", "Caste")])
+mosaicplot(table(maindata[, c("Location", "Caste")]), main = "Mosaic plot", color = TRUE)
+```  
+
+We see that Location and Caste variables couldn't totally be seperated.   
+Yamphudin is predominantly of "Ethnic" caste, i.e. people who do not confirm to the caste system.  
+Sulubung is mixed, while Bahundangi has predominantly higher castes.  
+**Decision:** Remove Caste and retain Location into the main model.
+
+# Removal of one outlier  
+Note: This was identified with multiple rounds during the model selection process.
+```{r}
+maindata = maindata %>% filter(LandPrice < max(maindata$LandPrice))
+#There is only one LandPrice which seems abnormally high (might be because of some kind of mistake, but this data point seems to be an influencial outlier. So, we removed it)  
+```
+
+# Model Selection
+Essential Variables::  
+**Location: ** With the hypothesis that location matters on people's perception towards nature. This is important to measure so that conservation activities take into consideration the needs and priorities of local communities.  
+
+**Education: ** Since based on my second chapter, Education is one of the goal that really can synergize with conservation goals. Also, preexisting studies show strong relationships between people's percetption towards conservation activities and thier education level.  
+
+**Accessibility (or maybe wellbeing) Variables: ** These are accessibility variables: EnoughFood, EnoughIncome, EnergySuff, WaterAccess, Healthy, DisasterFree. Basically, we need to know what is the relationship between people's perceived wellbeing and perceived contribution of nature to thier wellbeing. Our hypothesis is that people with high levels of wellbeing are more positive towards nature. This result could strengthen the need for conservation policies that are people-focussed.  
+
+## Non-Essential Variables::  
+Remaining variables that will be selected through dredge.  
+This also includes interaction terms between Location and the remaining "essential variables".
+
+
+## Complete Model:  
+```{r model selection first iteration}
+complete_model = lm(ncp_index ~ Location + Age + Education +
+                 LandPrice + Education + Gender + tlu + 
+                 EnoughFood + Farmpc + EnoughIncome + Healthy + 
+                 WaterAccess + EnergySuff + ElectricitySuff + DisasterFree + 
+                 Ladder + Occupation + Nature + 
+                   
+                   #intearction terms::
+                   
+                  Location*Caste + Location*Education +
+                 Location*EnoughFood + Location*EnoughIncome +
+                  Location*Healthy + Location*WaterAccess +
+                  Location*EnergySuff + Location*DisasterFree, data = maindata)
+```
+
+## Dreging:
+The "essential variables will be kept in the final model no matter what. We then calculate each and every combination of these essential variables with the remaining variables plus interaction terms, and calculated the AICc for each.  
+
+```{r dredging, eval=FALSE, echo=FALSE}
+#defining the fixed (or essential) variables:
+fixed_variables = c("Location", "EnoughFood", "EnoughIncome", 
+                    "Healthy", "WaterAccess", "EnergySuff", 
+                    "DisasterFree", "Education")
+#dredging
+#note: this is not calculated since it takes a lot of time.
+#instead, i have saved the first 20 models of the dredge function
+options(na.action = "na.fail") # Required for dredge to run
+model_selection <- dredge(model_complete, beta = "none", fixed = fixed_variables)
+options(na.action = "na.omit") # set back to default
+```  
+
+Note: The model_selection is stored locally because the size it very large. Only a subset of top 20 models have been uploaded into the GitHub repository:
+
+```{r reading }
+model_supp_subset <- readRDS("model_selection_subset20.RDS")
+#visualizing AIC Values
+plot(model_supp_subset$AICc)
+abline(h = (min(model_supp_subset$AICc) + 2), col = "red")
+```
