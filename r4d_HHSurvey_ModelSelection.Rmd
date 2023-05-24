@@ -1,5 +1,5 @@
 ---
-title: "r4d_HHSurvey_ModelSelection"
+title: "r4d_HHSurvey_ModelSelection_LinearRegression"
 author: "Biraj Adhikari"
 date: "2023-05-10"
 output: html_document
@@ -19,20 +19,7 @@ library(dplyr)
 ```
 
 #functions for this file:
-```{r}
-#These functions are for model diagnostics
-sf = function(y) {
-    c('Y>=1' = qlogis(mean(y >= 1)),
-    'Y>=2' = qlogis(mean(y >= 2)),
-    'Y>=3' = qlogis(mean(y >= 3)),
-    'Y>=4' = qlogis(mean(y>= 4)),
-    'Y>=5' = qlogis(mean(y>= 5)))
-}
-
-
-probfun = function(x) {
-  exp(x)/(1+exp(x))
-}
+```{r required functions}
 
 fct_case_when <- function(...) {
   args <- as.list(match.call())
@@ -46,7 +33,7 @@ fct_case_when <- function(...) {
 
 ## Data Import
 Since the results from imputation have response and explanatory variables separately, we need to combine this:
-```{r}
+```{r data import and merge}
 exp_vars <- readRDS("ImputationResults/clean_imputed_explanatory_dataset.rds")
 exp_vars <- data.frame(exp_vars)
 #remove auxillary variables:
@@ -71,7 +58,7 @@ rm(exp_vars, res_vars)
 ```
 
 ## Data Management
-```{r}
+```{r data cleaning}
 #creating ncp_index variable
 #first converting ncp perception variables to numeric
 ncpsubset <- maindata %>%
@@ -198,7 +185,7 @@ Sulubung is mixed, while Bahundangi has predominantly higher castes.
 
 # Removal of one outlier  
 Note: This was identified with multiple rounds during the model selection process.
-```{r}
+```{r outlier removal}
 maindata = maindata %>% filter(LandPrice < max(maindata$LandPrice))
 #There is only one LandPrice which seems abnormally high (might be because of some kind of mistake, but this data point seems to be an influencial outlier. So, we removed it)  
 ```
@@ -300,7 +287,15 @@ model.coef.extract <- cbind(model.coef, signf)
 
 write.csv(model.coef.extract, file = "RegressionResults/LinearRegResults_May2023.csv")
 #23May Note: Check whether the format of the file is okay.
+```  
+
+### Diagnostic Plots  
+Based on the figures below, model diagnostics looks good.  
+```{r diagnostic plots}
+par(mfrow = c(2,2))
+plot(model)
 ```
+
 
 ## Sensitivity Analysis  
 ### Caste-Location Interchange  
