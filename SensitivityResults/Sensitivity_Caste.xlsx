@@ -1,0 +1,20 @@
+"","Estimate","Std. Error","t value","Pr(>|t|)","signf"
+"(Intercept)",2.487,0.093,26.704,0,1
+"CasteHigher",0.329,0.06,5.491,0,1
+"CasteLower",0.3,0.146,2.051,0.041,1
+"GenderMale",-0.173,0.043,-4,0,1
+"Ladder",-0.007,0.011,-0.651,0.515,0
+"Farmpc",-0.002,0.001,-2.746,0.006,1
+"EnoughFoodNo",-0.164,0.092,-1.778,0.076,0
+"EnoughIncomeNo",0.132,0.046,2.888,0.004,1
+"HealthyNo",0.057,0.066,0.869,0.385,0
+"WaterAccessNo",0.249,0.065,3.802,0,1
+"EnergySuffNo",0.312,0.066,4.697,0,1
+"EducationBasic Literacy",-0.176,0.058,-3.043,0.002,1
+"EducationPrimary",-0.144,0.067,-2.163,0.031,1
+"EducationSecondary or more",-0.37,0.077,-4.816,0,1
+"DisasterFreeNo",-0.104,0.06,-1.752,0.08,0
+"CasteHigher:HealthyNo",0.218,0.097,2.25,0.025,1
+"CasteLower:HealthyNo",0.088,0.184,0.481,0.63,0
+"CasteHigher:WaterAccessNo",-0.242,0.095,-2.562,0.011,1
+"CasteLower:WaterAccessNo",-0.209,0.179,-1.162,0.246,0

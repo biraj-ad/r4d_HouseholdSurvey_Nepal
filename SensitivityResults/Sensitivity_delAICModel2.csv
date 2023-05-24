@@ -1,0 +1,24 @@
+"","Estimate","Std. Error","t value","Pr(>|t|)","signf"
+"(Intercept)",3.026,0.089,34.088,0,1
+"Farmpc",-0.002,0.001,-2.475,0.014,1
+"GenderMale",-0.096,0.037,-2.571,0.01,1
+"Ladder",-0.024,0.009,-2.626,0.009,1
+"DisasterFreeNo",-0.064,0.052,-1.223,0.222,0
+"EducationBasic Literacy",-0.03,0.051,-0.59,0.556,0
+"EducationPrimary",0.008,0.058,0.13,0.897,0
+"EducationSecondary or more",-0.222,0.068,-3.255,0.001,1
+"EnergySuffNo",0.099,0.073,1.349,0.178,0
+"EnoughFoodNo",-0.034,0.081,-0.425,0.671,0
+"EnoughIncomeNo",0.07,0.062,1.125,0.261,0
+"HealthyNo",0.155,0.061,2.53,0.012,1
+"LocationSulubung",-0.41,0.068,-6.02,0,1
+"LocationYamphudin",-0.879,0.068,-13.007,0,1
+"WaterAccessNo",0.008,0.063,0.131,0.896,0
+"EnergySuffNo:LocationSulubung",0.135,0.121,1.11,0.268,0
+"EnergySuffNo:LocationYamphudin",-0.531,0.442,-1.203,0.23,0
+"LocationSulubung:EnoughIncomeNo",-0.054,0.089,-0.604,0.546,0
+"LocationYamphudin:EnoughIncomeNo",0.204,0.104,1.958,0.051,0
+"LocationSulubung:HealthyNo",-0.228,0.097,-2.358,0.019,1
+"LocationYamphudin:HealthyNo",-0.173,0.108,-1.609,0.108,0
+"LocationSulubung:WaterAccessNo",0.014,0.087,0.157,0.875,0
+"LocationYamphudin:WaterAccessNo",0.37,0.12,3.083,0.002,1
