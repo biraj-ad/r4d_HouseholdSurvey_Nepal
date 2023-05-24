@@ -1,0 +1,539 @@
+---
+title: "r4d_HHSurvey_OrdinalRegression"
+author: "Biraj Adhikari"
+date: "2023-05-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r requirements, echo = T, message = F}
+library(dplyr)
+library(sure) 
+library(broom) #for tidy function (in model diagnostic chunks)
+
+require(foreign)
+require(ggplot2)
+require(MASS)
+require(Hmisc)
+```
+
+```{r ordinal regression diagnostic functions}
+#These functions are for model diagnostics
+sf = function(y) {
+    c('Y>=1' = qlogis(mean(y >= 1)),
+    'Y>=2' = qlogis(mean(y >= 2)),
+    'Y>=3' = qlogis(mean(y >= 3)),
+    'Y>=4' = qlogis(mean(y>= 4)),
+    'Y>=5' = qlogis(mean(y>= 5)))
+}
+
+
+probfun = function(x) {
+  exp(x)/(1+exp(x))
+}
+```
+
+## Function that returns coefficient and odd ratio tables for a polr object  
+```{r function for coefficients and CIs (for normal pval)}
+table.gen <- function(ord.reg.object){
+  coef.table <- round(coef(summary(ord.reg.object)),3)
+
+#calculation of p-value
+pval <- round(pnorm(abs(coef.table[, "t value"]), lower.tail = FALSE) * 2, 3)
+signf <- ifelse(pval < 0.05, "*", "n.s")
+
+coef.table <- data.frame(coef.table, pval, signf)
+
+#Odds Ratio and CI Table
+Value <- summary(ord.reg.object)$coef[,1]
+SE <- summary(ord.reg.object)$coef[,2]
+OR <- round(exp(Value), 3)
+OR2.5 <- round(exp(Value - SE*1.96), 3)
+OR97.5 <- round(exp(Value + SE*1.96),3)
+or.table <- data.frame(OR = OR, OR2.5 = OR2.5, OR97.5 = OR97.5)
+
+return(list(coef.table = coef.table, or.table = or.table))
+}
+  
+```
+
+  
+Bringing in the data
+```{r data input}
+maindata <- readRDS("hh_data_for_regression_March2023.RDS")
+#Removing the outlier (as done in exploration_Biraj_17Mar23.rmd file)
+maindata <- maindata %>% filter(LandPrice < max(maindata$LandPrice))
+```
+  
+We use these variables in all 9 ordinal regression functions
+
+# 1. Nature's Contribution to food
+
+## 1.1 NCP-Food: The Model  
+```{r ncp food model}
+ord.naturefood <- polr(NatureFood ~ Location + Gender + Ladder + Farmpc + 
+                         EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+                         EnergySuff + Education + DisasterFree + 
+                         Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.naturefood)
+```
+  
+## 1.2 NCP-Food Coefficients  
+```{r ncp food coefficients}
+ncp.food.coef <- table.gen(ord.naturefood)
+
+#Coefficients including adjusted p-values
+ncp.food.coef$coef.table
+```
+
+Interpretation:  
+For people living in Yamphudin, the log odds of having very positive perceptions on nature is -(-1.901) = 1.901 units higher than for people living in Bahundangi.   
+  
+The coefficient values for the variables represent the log odds of moving up one category in the dependent variable (NatureFood), when moving up one category in the independent variable (e.g. Location), while holding all other variables constant.   
+
+```{r ncp food odds ratios}
+ncp.food.coef$or.table
+```
+The Odds Ratios are more easy to interpret >>  
+First, if the odds change from <1 to >1 or vice-versa (as in the case of GenderMale), then this is showing that the results are not significant.  
+For results that are significant::  
+1. OR value < 1:: For people in Yamphudin, the odds of having negative perceptions on NatureFood (i.e. as we move from 1 to 5) is 1 - 0.15 = 0.85 = 85% lower than for people in Bahundangi, all other variables keeping constant.   
+Alternatively, we can also say that for people in Bahundangi, the odds of having negative perceptions on NatureFood is 1/0.15 = 6 times higher than for people in Yamphudin.  
+2. OR value > 1:: Although there aren't any OR values greater than 1 that is statistically signficant, I take the example of Gender-Male...For males, the odds of having negative perceptions on NatureFood is 1.24 times higher than for females, all other variables keeping constant.  
+
+**Interpretation of results**  
+For people's perception on nature's contribution to food, we find that:  
+1. People in the highlands had a greater odds of having positive perceptions on NCP-Food, in comparison to the lowlands.  
+2. People with a higher sense of overall wellbeing had greater odds of having positive perceptions on NCP-Food.  
+3. People who perceived that they had enough access to drinking water had a greater odds of having positive perceptions on NCP-Food.  
+4. People with secondary education or more had greater odds of having positive perceptions on NCP-food.  
+
+## 1.3 NCP-Food Diagnostic Plots  
+```{r NCP-Food Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureFood) ~ Location + Gender + Ladder + Farmpc + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+  
+Note: this figure is difference of predicted logits between Y>=3 - Y>=2  when the outcome variable is regressed individually by a single predictor. (Note, Y>=1 is Inf) The difference should more or less be the same across all categorical levels/quantiles(in case of numerical data).    
+
+
+# 2. Nature's Contribution to Income  
+## 2.1 NCP-Work: The Model  
+```{r ncp work model}
+ord.naturework <- polr(NatureWork ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.naturework)
+```
+## 2.2 NCP-Work Coefficients  
+```{r ncp work coefficients}
+ncp.work.coef <- table.gen(ord.naturework)
+
+#Coefficients including adjusted p-values
+ncp.work.coef$coef.table
+```
+
+```{r ncp work odds ratios}
+ncp.work.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards income:  
+1. People in the highlands had a greater odds of having higher perceptions on NCP-Income in comparison to people in the lowlands.  
+2. People who perceived that they had enough income in the household had greater odds of having higher perceptions on NCP-Income in comparison to people who perceived that they did not have enough income.  
+3. People with secondary education or more had greater odds of having positive perceptions on NCP-Income.    
+
+## 2.3 NCP-Work Diagnostic Plots  
+```{r NCP-Work Diagnostic plots}
+s  <- with(maindata, summary(as.numeric(NatureWork) ~ Location + Gender + Ladder + Farmpc + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree  + Location*Healthy + Location*WaterAccess, fun = sf))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+# 3. Nature's Contribution to Health  
+## 3.1 Nature-Health: The Model  
+```{r ncp health model}
+ord.naturehealth <- polr(NatureHealth ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.naturehealth)
+```
+## 3.2 NCP-Health Coefficients  
+```{r ncp health coefficients}
+ncp.health.coef <- table.gen(ord.naturehealth)
+
+#Coefficients including adjusted p-values
+ncp.health.coef$coef.table
+```
+
+```{r ncp health odds ratios}
+ncp.health.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards health:  
+1. People in the highlands had a greater odds of having higher perceptions on NCP-Health in comparison to people in the lowlands. 
+2. People with a higher sense of overall wellbeing had greater odds of having positive perceptions on NCP-Health. 
+2. People who perceived that they had enough income in the household had greater odds of having higher perceptions on NCP-Health in comparison to people who perceived that they did not have enough income.  
+3. The higher the people's dependence on their own farm for food, the greater the odds were of having higher percetions on NCP-Health.   
+4. Males had higher odds of having positive perceptions on NCP-Health than females.
+
+## 3.3 NCP-Health Diagnostic Plots  
+```{r NCP-Health Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureHealth) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+# 4. Nature's Contribution to Drinking Water  
+
+## 4.1 NCP-Water: The Model  
+```{r ncp water model}
+ord.naturewater <- polr(NatureWater ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.naturewater)
+```
+## 4.2 NCP-Water Coefficients  
+```{r ncp water coefficients}
+ncp.water.coef <- table.gen(ord.naturewater)
+
+#Coefficients including adjusted p-values
+ncp.water.coef$coef.table
+```
+
+```{r ncp water odds ratios}
+ncp.water.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards water:  
+1. People in the highlands and the hills respectively had 9 and 5 times higher odds of having higher perceptions on NCP-Water in comparison to people in the lowlands. 
+2. Males had higher odds of having positive perceptions on NCP-Water than females.
+3. The higher the people's dependence on their own farm for food, the greater the odds were of having higher perceptions on NCP-Water.   
+4. People who perceived that they had enough access to drinking water had a greater odds of having positive perceptions on NCP-Water.  
+5. People who perceived that they had sufficient energy in the household had greater odds of having higher perceptions on NCP-Water in comparison to people who perceived that they did not have enough income.  
+
+## 4.3 NCP-Water Diagnostic Plots  
+```{r NCP-Water Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureWater) ~ Location + Gender + Ladder + Farmpc + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+# 5. Nature's Contribution to energy access  
+## 5.1 NCP-Energy: The Model  
+```{r ncp energy model}
+ord.natureenergy <- polr(NatureEnergy ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.natureenergy)
+```
+## 5.2 NCP-Energy Coefficients  
+```{r ncp energy coefficients}
+ncp.energy.coef <- table.gen(ord.natureenergy)
+
+#Coefficients including adjusted p-values
+ncp.energy.coef$coef.table
+```
+
+```{r ncp energy odds ratios}
+ncp.energy.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards energy:  
+1. People in the highlands and the hills respectively had 13 and 7.6 times higher odds of having higher perceptions on NCP-Energy in comparison to people in the lowlands.  
+2. The more the people perceived they had a fulfilled life, the higher the oods were of having positive perceptions on NCP-Energy.  
+3. People who had enough energy for cooking were 5 times more likely to have positive perceptions on NCP-Energy, than people who did not have enough energy for cooking.  
+4. Illeterate people were 1.75 times more likely to have positive perceptions on NCP-Energy than people with basic literacy.  
+
+## 5.3 NCP-Energy Diagnostic Plots  
+```{r NCP-Energy Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureEnergy) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+  # 6. Nature's Contribution to Education  
+  ## 6.1 NCP-Education: The Model  
+```{r ncp education model}
+ord.natureeducation <- polr(NatureEducation ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.natureenergy)
+```
+## 6.2 NCP-Education Coefficients  
+```{r ncp education coefficients}
+ncp.education.coef <- table.gen(ord.natureeducation)
+
+#Coefficients including adjusted p-values
+ncp.education.coef$coef.table
+```
+
+```{r ncp education odds ratios}
+ncp.education.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards education:  
+1. People in the highlands and the hills respectively had 12.5 and 3 times higher odds of having higher perceptions on NCP-Education in comparison to people in the lowlands.  
+
+## 6.3 NCP-Education Diagnostic Plots  
+```{r NCP-Education Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureEducation) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+# 7 Nature's Contribution to Disaster Reducation  
+## 7.1 NCP-DRR: The Model  
+```{r ncp drr model}
+ord.naturedrr <- polr(NatureDrr ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.naturedrr)
+```
+## 7.2 NCP-DRR Coefficients  
+```{r ncp drr coefficients}
+ncp.drr.coef <- table.gen(ord.naturedrr)
+
+#Coefficients including adjusted p-values
+ncp.drr.coef$coef.table
+```
+
+```{r ncp drr odds ratios}
+ncp.drr.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards DRR:  
+1. People in the highlands and the hills rboth had 5 times higher odds of having higher perceptions on NCP-DRR in comparison to people in the lowlands.  
+2. Males were 1.54 times more likely of having posiive perceptions on NCP-DRR than females.  
+
+## 7.3 NCP-DRR Diagnostic Plots  
+```{r NCP-DRR Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureDrr) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+# 8. Nature's contribution to recreation
+## 8.1 NCP-recreation: The Model  
+```{r ncp recreation model}
+ord.naturerecrea <- polr(NatureRecrea ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+summary(ord.naturerecrea)
+```
+## 8.2 NCP-recreation Coefficients  
+```{r ncp recreation coefficients}
+ncp.recrea.coef <- table.gen(ord.naturerecrea)
+
+#Coefficients including adjusted p-values
+ncp.recrea.coef$coef.table
+```
+
+```{r ncp recreation odds ratios}
+ncp.recrea.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards recreation:  
+1. People in the highlands and the hills respectively were 3 and 8 times more likely of having higher perceptions on NCP-recreation in comparison to people in the lowlands.  
+2. The higher the number of cattle a person owned, the higher the odds were of having positive perceptions on NCP-recreation.   
+2. people with secondary education or more were more likely to have positive perceptions of NCP-recreation in comparison to people that were illiterate.  
+
+## 8.3 NCP-Recreation Diagnostic Plots  
+```{r NCP-Recreation Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureRecrea) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+# 9. Nature's contribution to Culture
+## 9.1 NCP-Culture: The Model  
+```{r ncp culture model}
+ord.natureculture <- polr(NatureCulture ~ Location + Gender + Ladder + Farmpc + 
+    EnoughFood + EnoughIncome + Healthy + WaterAccess + 
+    EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, data = maindata, Hess = TRUE)
+
+summary(ord.natureculture)
+```
+## 9.2 NCP-Culture Coefficients  
+```{r ncp culture coefficients}
+ncp.culture.coef <- table.gen(ord.natureculture)
+
+#Coefficients including adjusted p-values
+ncp.culture.coef$coef.table
+```
+
+```{r ncp culture odds ratios}
+ncp.culture.coef$or.table
+```
+**Interpretation of Results**
+We find that for people's perception of nature's contribution towards culture:  
+1. People in the highlands and the hills respectively were 4 and 8.5 times more likely of having higher perceptions on NCP-recreation in comparison to people in the lowlands.  
+
+## 9.3 NCP-Culture Diagnostic Plots  
+```{r NCP-Culture Diagnostic plots}
+(s  <- with(maindata, summary(as.numeric(NatureCulture) ~ Location + Gender + Ladder + Farmpc + tlu + EnoughFood + EnoughIncome + Healthy + WaterAccess + EnergySuff + Education + DisasterFree + Location*Healthy + Location*WaterAccess, fun = sf)))
+
+#note: this chunk of code places logit(Y>=2) as zero (for reference so that it is easy to see in plot)
+#and then calculates the difference at each adjacent levels.
+s[,6] <- s[,6] - s[,5]
+s[,5] <- s[,5] - s[,4]
+s[,4] <- s[,4] - s[,3]
+s[,3] <- s[,3] - s[,3]
+
+s[is.infinite(s) & s <0] <- -5 #so that this does not appear in the graph
+s[is.na(s)] <- 4
+
+
+plot(s, which = 2:3, pch = 2:3, xlab = "logit", main = '', xlim = c(-4,2))
+
+```
+
+```{r saving all tables, echo=F}
+# Saving all tables into an excel file
+library(xlsx)
+
+#Regression Coefficients
+write.xlsx(ncp.food.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Food")
+write.xlsx(ncp.work.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Income", append = TRUE)
+write.xlsx(ncp.health.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Health", append = TRUE)
+write.xlsx(ncp.water.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Water", append = TRUE)
+write.xlsx(ncp.energy.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Energy", append = TRUE)
+write.xlsx(ncp.education.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Education", append = TRUE)
+write.xlsx(ncp.drr.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "DRR", append = TRUE)
+write.xlsx(ncp.recrea.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Recreation", append = TRUE)
+write.xlsx(ncp.culture.coef$coef.table, file = "RegressionResults/Ord.Reg.Coefs.xlsx",
+           sheetName = "Culture", append = TRUE)
+
+#Odds Ratio
+write.xlsx(ncp.food.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Food")
+write.xlsx(ncp.work.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Income", append = TRUE)
+write.xlsx(ncp.health.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Health", append = TRUE)
+write.xlsx(ncp.water.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Water", append = TRUE)
+write.xlsx(ncp.energy.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Energy", append = TRUE)
+write.xlsx(ncp.education.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Education", append = TRUE)
+write.xlsx(ncp.drr.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "DRR", append = TRUE)
+write.xlsx(ncp.recrea.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Recreation", append = TRUE)
+write.xlsx(ncp.culture.coef$or.table, file = "RegressionResults/OddsRaio.xlsx",
+           sheetName = "Culture", append = TRUE)
+```
+
