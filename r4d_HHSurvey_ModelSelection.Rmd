@@ -142,9 +142,7 @@ mutate(DisasterFree = fct_case_when(
   TRUE ~ "No"
 )) %>%
 
-#note: i haven't converted tlu to tlu.log because it produces inf values
-#removed WaterShortage and Drr since i converted them to WaterAcess and DisasterFree or not
-#(the variables are framed in a way of whether they have access to them or not)
+
 
 select(-WaterShortage, -Drr)
   
@@ -158,6 +156,8 @@ saveRDS(maindata, "hh_data_for_regression_March2023.RDS")
 # Chronbach's Alpha Test
 ```{r chronbach's alpha}
 library(ltm)
+
+#dplyr's select will be masked from now on.
 maindata %>% dplyr::select(NatureFood, NatureWork, NatureHealth, NatureWater, NatureEnergy, NatureEducation, NatureDrr, NatureRecrea, NatureCulture) %>% cronbach.alpha(na.rm = TRUE, CI = TRUE, standardized = TRUE)
 ```
   
@@ -209,7 +209,7 @@ Essential Variables::
 
 **Education: ** Since based on my second chapter, Education is one of the goal that really can synergize with conservation goals. Also, preexisting studies show strong relationships between people's percetption towards conservation activities and thier education level.  
 
-**Accessibility (or maybe wellbeing) Variables: ** These are accessibility variables: EnoughFood, EnoughIncome, EnergySuff, WaterAccess, Healthy, DisasterFree. Basically, we need to know what is the relationship between people's perceived wellbeing and perceived contribution of nature to thier wellbeing. Our hypothesis is that people with high levels of wellbeing are more positive towards nature. This result could strengthen the need for conservation policies that are people-focussed.  
+**Wellbeing Variables: ** These are accessibility variables: EnoughFood, EnoughIncome, EnergySuff, WaterAccess, Healthy, DisasterFree. Basically, we need to know what is the relationship between people's perceived wellbeing and perceived contribution of nature to thier wellbeing. Our hypothesis is that people with high levels of wellbeing are more positive towards nature. This result could strengthen the need for conservation policies that are people-focussed.  
 
 ## Non-Essential Variables::  
 Remaining variables that will be selected through dredge.  
@@ -250,9 +250,53 @@ options(na.action = "na.omit") # set back to default
 
 Note: The model_selection is stored locally because the size it very large. Only a subset of top 20 models have been uploaded into the GitHub repository:
 
-```{r reading }
-model_supp_subset <- readRDS("model_selection_subset20.RDS")
+```{r reading top 20 models from dredge}
+model_selection_subset <- readRDS("model_selection_subset20.RDS")
 #visualizing AIC Values
-plot(model_supp_subset$AICc)
-abline(h = (min(model_supp_subset$AICc) + 2), col = "red")
+plot(model_selection_subset$AICc)
+abline(h = (min(model_selection_subset$AICc) + 2), col = "red")
+```  
+
+There are 5 models with delAICc <=2. Looking at these models closely:
+```{r 5 top models AICc}
+head(model_selection_subset, 5)
 ```
+```{r checking the vifs for each model}
+#Checking VIFs 
+library(car)
+library(MuMIn)
+vif(get.models(model_selection_subset, subset = 1)[[1]])
+vif(get.models(model_selection_subset, subset = 2)[[1]])
+vif(get.models(model_selection_subset, subset = 3)[[1]])
+vif(get.models(model_selection_subset, subset = 4)[[1]])
+vif(get.models(model_selection_subset, subset = 5)[[1]])
+```
+
+All VIF values are okay. 
+We then proceed to select the most parsimonious model, which is the 2nd model.
+```{r getting the final selected model}
+#note, we could use the get.models function but I think it makes more sense to explicitly define them
+model <-lm(ncp_index ~ Location + Gender + Ladder + Farmpc +
+             EnoughFood + EnoughIncome + Healthy + WaterAccess +
+             EnergySuff + Education + DisasterFree + 
+             Location * Healthy + Location * WaterAccess, data = maindata)
+
+summary(model)
+```  
+
+Two Interaction Terms: Location|Healthy and Location|WaterAccess have been retained in the model. Plotting the interactions:
+```{r plotting interaction terms}
+library(lattice)
+interaction.plot(x.factor = maindata$Location, trace.factor = maindata$Healthy, response = maindata$ncp_index)
+interaction.plot(x.factor = maindata$Location, trace.factor = maindata$WaterAccess, response = maindata$ncp_index)
+```  
+Indeed, the interaction effect looks significant.
+```{r extracting coeff table 24Apr 23}
+model.coef <- round(summary(model)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "RegressionResults/LinearRegResults_May2023.csv")
+#23May Note: Check whether the format of the file is okay.
+```
+
