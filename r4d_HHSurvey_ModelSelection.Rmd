@@ -273,7 +273,9 @@ vif(get.models(model_selection_subset, subset = 5)[[1]])
 ```
 
 All VIF values are okay. 
-We then proceed to select the most parsimonious model, which is the 2nd model.
+We then proceed to select the most parsimonious model, which is the 2nd model.  
+
+# Linear Regression using the selected model
 ```{r getting the final selected model}
 #note, we could use the get.models function but I think it makes more sense to explicitly define them
 model <-lm(ncp_index ~ Location + Gender + Ladder + Farmpc +
@@ -299,4 +301,70 @@ model.coef.extract <- cbind(model.coef, signf)
 write.csv(model.coef.extract, file = "RegressionResults/LinearRegResults_May2023.csv")
 #23May Note: Check whether the format of the file is okay.
 ```
+
+## Sensitivity Analysis  
+### Caste-Location Interchange  
+```{r caste location sensitivity analysis}
+modelcaste <-lm(ncp_index ~ Caste + Gender + Ladder + Farmpc +
+             EnoughFood + EnoughIncome + Healthy + WaterAccess +
+             EnergySuff + Education + DisasterFree + 
+             Caste * Healthy + Caste * WaterAccess, data = maindata)
+
+summary(modelcaste)
+
+#as before, extracting the caste variables::
+model.coef <- round(summary(modelcaste)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "SensitivityResults/Sensitivity_Caste.xlsx")
+```
+
+### Sensitivity Analysis (other top-5 models)  
+A synthesis of sensitivity analysis for the remaining 4 models is available in the Supplementary Materials.
+```{r sensitivity analysis top-5 models}
+#We take the third model for the main analysis. There are 4 other models with del.AIC <=2. We calculate the coefficients table for each of these models
+
+library(MuMIn)
+#Model 1
+senmodel1 <- (get.models(model_selection_subset, subset = 1)[[1]])
+
+model.coef <- round(summary(senmodel1)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "SensitivityResults/Sensitivity_delAICModel1.csv")
+
+#Model 2
+senmodel2 <- (get.models(model_selection_subset, subset = 2)[[1]])
+
+model.coef <- round(summary(senmodel2)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "SensitivityResults/Sensitivity_delAICModel2.csv")
+
+#we used model 3 as the main model
+#Model 4
+senmodel4 <- (get.models(model_selection_subset, subset = 4)[[1]])
+
+model.coef <- round(summary(senmodel4)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "SensitivityResults/Sensitivity_delAICModel4.csv")
+
+#Model 5
+senmodel5 <- (get.models(model_selection_subset, subset = 5)[[1]])
+
+model.coef <- round(summary(senmodel5)$coef, 3)
+signf <- ifelse(model.coef[,4] < 0.05, 1, 0)
+model.coef.extract <- cbind(model.coef, signf)
+
+write.csv(model.coef.extract, file = "SensitivityResults/Sensitivity_delAICModel5.csv")
+
+rm(senmodel1, senmodel2, senmodel4, senmodel5)
+```
+
+
 
